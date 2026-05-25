@@ -5,12 +5,15 @@
  * Setup:
  *   1. Enable Gmail API at console.cloud.google.com
  *   2. Create OAuth 2.0 credentials (Desktop app), download as credentials.json
- *   3. On first run: npx ts-node scripts/gmail-sync.ts --auth
+ *   3. On first run: npm run gmail-auth
  *      (opens browser, saves token to scripts/token.json)
- *   4. Subsequent runs: npx ts-node scripts/gmail-sync.ts
+ *   4. Regular sync: npm run gmail-sync
+ *   5. Full history import: npm run gmail-history
  *
- * Cron (daily at 8am):
- *   0 8 * * * cd /path/to/Investing-101 && npx ts-node scripts/gmail-sync.ts >> logs/gmail-sync.log 2>&1
+ * Flags:
+ *   --auth          Run OAuth flow only
+ *   --all           Import full Gmail history (no date filter)
+ *   --days N        Look back N days (default: 2)
  */
 
 import fs from 'fs';
@@ -22,23 +25,29 @@ import type { OAuth2Client } from 'google-auth-library';
 import pdfParse from 'pdf-parse';
 import { parseGrowwPDF } from '../src/lib/pdf-parser';
 
-// ── Paths ────────────────────────────────────────────────────────────────────
+// ── Paths ─────────────────────────────────────────────────────────────────────
 
 const SCRIPTS_DIR = path.join(__dirname);
-const CREDS_PATH = path.join(SCRIPTS_DIR, 'credentials.json');
-const TOKEN_PATH = path.join(SCRIPTS_DIR, 'token.json');
-const LOGS_DIR = path.join(__dirname, '..', 'logs');
+const CREDS_PATH  = path.join(SCRIPTS_DIR, 'credentials.json');
+const TOKEN_PATH  = path.join(SCRIPTS_DIR, 'token.json');
+const LOGS_DIR    = path.join(__dirname, '..', 'logs');
 const PROCESSED_LOG = path.join(LOGS_DIR, 'processed-emails.json');
 
-const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
-
+const SCOPES       = ['https://www.googleapis.com/auth/gmail.readonly'];
 const GROWW_SENDER = 'noreply@groww.in';
 const SUBJECT_PATTERNS = [
   /^Report:\s*Contract Note/i,
   /^Report:\s*Daily Margin Statement/i,
 ];
 
-// ── Auth ─────────────────────────────────────────────────────────────────────
+// ── CLI args ──────────────────────────────────────────────────────────────────
+
+const IS_AUTH    = process.argv.includes('--auth');
+const IS_ALL     = process.argv.includes('--all');
+const daysArgIdx = process.argv.indexOf('--days');
+const DAYS_BACK  = daysArgIdx >= 0 ? parseInt(process.argv[daysArgIdx + 1]) || 2 : 2;
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
 
 async function getAuthClient(): Promise<OAuth2Client> {
   if (!fs.existsSync(CREDS_PATH)) {
@@ -93,7 +102,11 @@ function waitForOAuthCode(port: number): Promise<string> {
 
 function loadProcessedIds(): Set<string> {
   if (!fs.existsSync(PROCESSED_LOG)) return new Set();
-  return new Set(JSON.parse(fs.readFileSync(PROCESSED_LOG, 'utf-8')));
+  try {
+    return new Set(JSON.parse(fs.readFileSync(PROCESSED_LOG, 'utf-8')));
+  } catch {
+    return new Set();
+  }
 }
 
 function saveProcessedId(id: string) {
@@ -108,28 +121,44 @@ function isGrowwEmail(from: string, subject: string): boolean {
   return SUBJECT_PATTERNS.some(p => p.test(subject));
 }
 
-async function fetchGrowwEmails(auth: OAuth2Client, daysBack = 2) {
-  const gmail = google.gmail({ version: 'v1', auth });
-  const after = Math.floor((Date.now() - daysBack * 86_400_000) / 1000);
+async function fetchAllGrowwEmails(auth: OAuth2Client): Promise<{ id: string }[]> {
+  const gmail  = google.gmail({ version: 'v1', auth });
+  const query  = IS_ALL
+    ? `from:${GROWW_SENDER} has:attachment filename:pdf`
+    : `from:${GROWW_SENDER} after:${Math.floor((Date.now() - DAYS_BACK * 86_400_000) / 1000)} has:attachment filename:pdf`;
 
-  const query = `from:${GROWW_SENDER} after:${after} has:attachment filename:pdf`;
-  const list = await gmail.users.messages.list({ userId: 'me', q: query, maxResults: 20 });
-  return list.data.messages ?? [];
+  const messages: { id: string }[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const res = await gmail.users.messages.list({
+      userId: 'me',
+      q: query,
+      maxResults: 500,
+      pageToken,
+    });
+    for (const m of res.data.messages ?? []) {
+      if (m.id) messages.push({ id: m.id });
+    }
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+
+  return messages;
 }
 
 async function getMessageDetails(auth: OAuth2Client, msgId: string) {
-  const gmail = google.gmail({ version: 'v1', auth });
-  const msg = await gmail.users.messages.get({ userId: 'me', id: msgId, format: 'full' });
+  const gmail   = google.gmail({ version: 'v1', auth });
+  const msg     = await gmail.users.messages.get({ userId: 'me', id: msgId, format: 'full' });
   const headers = msg.data.payload?.headers ?? [];
-  const from = headers.find(h => h.name?.toLowerCase() === 'from')?.value ?? '';
+  const from    = headers.find(h => h.name?.toLowerCase() === 'from')?.value ?? '';
   const subject = headers.find(h => h.name?.toLowerCase() === 'subject')?.value ?? '';
-  const parts = msg.data.payload?.parts ?? [];
+  const parts   = msg.data.payload?.parts ?? [];
   return { from, subject, parts, msgId };
 }
 
 async function downloadAttachment(auth: OAuth2Client, msgId: string, attachmentId: string): Promise<Buffer> {
   const gmail = google.gmail({ version: 'v1', auth });
-  const att = await gmail.users.messages.attachments.get({
+  const att   = await gmail.users.messages.attachments.get({
     userId: 'me',
     messageId: msgId,
     id: attachmentId,
@@ -155,7 +184,7 @@ function findPdfParts(parts: any[]): { filename: string; attachmentId: string }[
 // ── Portfolio import ──────────────────────────────────────────────────────────
 
 async function importToPortfolio(parseResult: ReturnType<typeof parseGrowwPDF>, subject: string) {
-  const baseUrl = process.env.PORTFOLIO_URL ?? 'http://localhost:3000';
+  const baseUrl = process.env.PORTFOLIO_URL ?? 'http://localhost:4000';
 
   if (parseResult.document_type === 'CONTRACT_NOTE' && parseResult.trades?.length) {
     console.log(`  Importing ${parseResult.trades.length} trade(s) from contract note…`);
@@ -190,7 +219,6 @@ async function importToPortfolio(parseResult: ReturnType<typeof parseGrowwPDF>, 
   } else if (parseResult.document_type === 'MARGIN_STATEMENT' && parseResult.margin_statement) {
     const ms = parseResult.margin_statement;
     console.log(`  Margin Statement — Available: ₹${ms.margin_available}, Used: ₹${ms.margin_used}`);
-    // Margin statements are logged but not saved as investments (informational only)
     const logPath = path.join(LOGS_DIR, `margin-${ms.date}.json`);
     if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
     fs.writeFileSync(logPath, JSON.stringify(ms, null, 2));
@@ -206,9 +234,9 @@ async function importToPortfolio(parseResult: ReturnType<typeof parseGrowwPDF>, 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const isAuthMode = process.argv.includes('--auth');
-
   console.log(`[${new Date().toISOString()}] Groww Gmail Sync starting…`);
+  if (IS_ALL)  console.log('Mode: FULL HISTORY (all emails)');
+  else         console.log(`Mode: last ${DAYS_BACK} day(s)`);
 
   let auth: OAuth2Client;
   try {
@@ -218,20 +246,20 @@ async function main() {
     process.exit(1);
   }
 
-  if (isAuthMode) {
-    console.log('Auth complete. Run without --auth for normal sync.');
+  if (IS_AUTH) {
+    console.log('Auth complete. Run "npm run gmail-sync" for a regular sync or "npm run gmail-history" for full history.');
     process.exit(0);
   }
 
   const processedIds = loadProcessedIds();
-  const messages = await fetchGrowwEmails(auth);
-  console.log(`Found ${messages.length} Groww email(s) in the last 2 days.`);
+  const messages     = await fetchAllGrowwEmails(auth);
+  console.log(`Found ${messages.length} Groww email(s).`);
 
   let imported = 0;
-  let skipped = 0;
+  let skipped  = 0;
+  let errors   = 0;
 
   for (const msg of messages) {
-    if (!msg.id) continue;
     if (processedIds.has(msg.id)) { skipped++; continue; }
 
     const { from, subject, parts, msgId } = await getMessageDetails(auth, msg.id);
@@ -254,19 +282,20 @@ async function main() {
       console.log(`  Parsing ${filename}…`);
       try {
         const pdfBuffer = await downloadAttachment(auth, msgId, attachmentId);
-        const { text } = await pdfParse(pdfBuffer);
-        const result = parseGrowwPDF(text);
+        const { text }  = await pdfParse(pdfBuffer);
+        const result    = parseGrowwPDF(text);
         await importToPortfolio(result, subject);
         imported++;
       } catch (err) {
         console.error(`  Error parsing ${filename}:`, err instanceof Error ? err.message : err);
+        errors++;
       }
     }
 
     saveProcessedId(msgId);
   }
 
-  console.log(`\nDone. Imported: ${imported}, Skipped: ${skipped}.`);
+  console.log(`\nDone. Imported: ${imported}, Skipped: ${skipped}, Errors: ${errors}.`);
 }
 
 main();

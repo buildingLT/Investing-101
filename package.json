@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "next lint",
     "gmail-auth": "ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts --auth",
-    "gmail-sync": "ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts"
+    "gmail-sync": "ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts",
+    "gmail-history": "ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts --all",
+    "cron:setup": "bash scripts/setup-cron.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3",
