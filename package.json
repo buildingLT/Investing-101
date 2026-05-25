@@ -7,9 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "gmail-auth": "ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts --auth",
-    "gmail-sync": "ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts",
-    "gmail-history": "ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts --all",
+    "gmail-auth": "npx ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts --auth",
+    "gmail-sync": "npx ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts",
+    "gmail-history": "npx ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts --all",
     "cron:setup": "bash scripts/setup-cron.sh"
   },
   "dependencies": {
