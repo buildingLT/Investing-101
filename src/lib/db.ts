@@ -86,6 +86,27 @@ function initializeSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_transactions_investment_id ON transactions(investment_id);
   `);
 
+  // Seed default investment rules if empty
+  const rulesCount = database.prepare('SELECT COUNT(*) as cnt FROM investment_rules').get() as { cnt: number };
+  if (rulesCount.cnt === 0) {
+    const insertRule = database.prepare('INSERT INTO investment_rules (rule_text) VALUES (?)');
+    const defaultRules = [
+      'Never buy on 1-year returns alone — always check 3Y and 5Y performance',
+      'Always compare to benchmark — a fund beating market is what matters, not absolute returns',
+      'Direct plan always over regular — same fund, 0.5–1% more returns annually',
+      'For stocks — read the business: is revenue growing? Is debt rising faster than revenue?',
+      'High P/E is not always bad — fast profit growth can justify premium valuations',
+      'Sharpe ratio beats raw returns for MF comparison — higher Sharpe = smarter risk-taking',
+      'Check fund manager tenure before buying — past returns don\'t apply if manager left',
+      'Sector funds are satellite, not core — max 25% of portfolio in sector/thematic funds',
+      'Don\'t chase last year\'s top performer — buy consistent compounders instead',
+      'Review portfolio annually, not monthly — rebalance only if something fundamentally changed',
+    ];
+    for (const rule of defaultRules) {
+      insertRule.run(rule);
+    }
+  }
+
   // Seed default allocation targets if empty
   const count = database.prepare('SELECT COUNT(*) as cnt FROM allocation_targets').get() as { cnt: number };
   if (count.cnt === 0) {

@@ -10,6 +10,7 @@ import {
   Plus,
   MessageCircle,
   TrendingUp,
+  ShieldCheck,
 } from 'lucide-react';
 
 const navItems = [
@@ -19,6 +20,7 @@ const navItems = [
   { href: '/mix', label: 'My Mix', icon: PieChart },
   { href: '/add', label: 'Add Investment', icon: Plus },
   { href: '/advisor', label: 'AI Advisor', icon: MessageCircle },
+  { href: '/audit', label: 'Portfolio Audit', icon: ShieldCheck },
 ];
 
 export default function Sidebar() {
