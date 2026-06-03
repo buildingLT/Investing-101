@@ -10,7 +10,8 @@
     "gmail-auth": "./node_modules/.bin/ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts --auth",
     "gmail-sync": "./node_modules/.bin/ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts",
     "gmail-history": "./node_modules/.bin/ts-node -P tsconfig.scripts.json scripts/gmail-sync.ts --all",
-    "cron:setup": "bash scripts/setup-cron.sh"
+    "cron:setup": "bash scripts/setup-cron.sh",
+    "seed-portfolio": "./node_modules/.bin/ts-node -P tsconfig.scripts.json scripts/seed-portfolio.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3",
